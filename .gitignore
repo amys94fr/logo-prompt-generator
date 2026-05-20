@@ -29,5 +29,8 @@ Thumbs.db
 output/
 *.log
 
+# Local conversion tools (downloaded binaries)
+.tools/
+
 # OS
 desktop.ini

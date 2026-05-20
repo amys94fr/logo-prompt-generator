@@ -12,6 +12,8 @@
 
 [Quick Start](#quick-start) · [Demo](#demo) · [Why](#why-this-exists) · [Features](#features) · [Examples](#examples) · [Roadmap](#roadmap)
 
+![Demo](demo/logo-prompt-generator.gif)
+
 </div>
 
 ---
@@ -36,17 +38,15 @@ A single Python script that asks you 8 well-designed questions, then assembles a
 
 ## Demo
 
-Watch a full 30-second session: [`demo/logo-prompt-generator.cast`](demo/logo-prompt-generator.cast)
+The GIF at the top shows a complete 30-second session. The raw asciinema recording is also available at [`demo/logo-prompt-generator.cast`](demo/logo-prompt-generator.cast) and can be replayed with `asciinema play`.
+
+To regenerate everything after changing the script:
 
 ```bash
-# Play locally (requires asciinema)
-asciinema play demo/logo-prompt-generator.cast
-
-# Or upload to asciinema.org for a shareable URL
-asciinema upload demo/logo-prompt-generator.cast
+python scripts/generate_demo_cast.py
+# then re-render the GIF with agg
+# (see scripts/generate_demo_cast.py header for details)
 ```
-
-You can also drag and drop the `.cast` file at [asciinema.org/a/upload](https://asciinema.org/a/upload) to get an embeddable player. To regenerate the demo after changing the script, run `python scripts/generate_demo_cast.py`.
 
 ### Session walkthrough
 

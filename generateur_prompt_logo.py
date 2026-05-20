@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Générateur de Prompts pour Logos.
+Logo Prompt Generator.
 
-Outil CLI interactif qui produit un prompt optimisé pour DALL-E 3, Midjourney,
-Stable Diffusion ou tout autre générateur d'images, à partir d'une série de
-questions guidées sur l'identité de la marque.
+Interactive CLI that builds an optimized prompt for DALL-E 3, Midjourney,
+Stable Diffusion or any image generator, by guiding the user through a
+structured brand brief.
+
+The generated prompt is always in English (image models perform best in
+English). Only the interface is translated. Two languages are supported
+out of the box: English and French.
 
 Usage:
     python generateur_prompt_logo.py
-    python generateur_prompt_logo.py --quick        # mode rapide (presets)
-    python generateur_prompt_logo.py --english      # prompt généré en anglais (défaut)
-    python generateur_prompt_logo.py --no-color     # désactiver les couleurs ANSI
+    python generateur_prompt_logo.py --quick      # quick mode with presets
+    python generateur_prompt_logo.py --lang fr    # force French interface
+    python generateur_prompt_logo.py --lang en    # force English interface
+    python generateur_prompt_logo.py --no-color   # disable ANSI colors
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import locale as _locale
 import os
 import platform
 import shutil
@@ -26,16 +32,246 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 
 # ---------------------------------------------------------------------------
-# UI helpers : couleurs ANSI, prompts, formatage
+# Internationalization (i18n)
+# ---------------------------------------------------------------------------
+
+LANG = "en"
+SUPPORTED_LANGS = ("en", "fr")
+
+# All user-facing strings, keyed by language code.
+# The generated prompt itself is always in English and lives in LogoBrief.
+T: dict[str, dict[str, str]] = {
+    "en": {
+        # Banners and section titles
+        "banner_title": "Logo Prompt Generator: DALL-E 3 / Midjourney / SDXL",
+        "intro_8q": "Answer the 8 questions to generate a tailored prompt.",
+        "step_label": "Step {n}/{total}",
+        "step_1_title": "Brand identity",
+        "step_2_title": "Sector",
+        "step_3_title": "Logo type",
+        "step_4_title": "Values & emotions",
+        "step_5_title": "Symbolic concept",
+        "step_6_title": "Main visual element",
+        "step_7_title": "Graphic style",
+        "step_8_title": "Colors & typography",
+        "quick_mode_title": "Quick mode: presets",
+        "generated_prompt_header": "Generated prompt",
+        "tips_header": "Tips",
+        # Questions (full interview)
+        "q_brand_name": "What is the name of your brand?",
+        "q_sector": "What sector does your brand operate in?",
+        "q_logo_type": "What type of logo do you want?",
+        "q_values": "What values should the logo convey? (multi)",
+        "q_concept": "Concept in one sentence (leave empty to skip):",
+        "q_main_element": "Describe the main visual element:",
+        "q_styles": "Which graphic styles? (multi)",
+        "q_palette": "Which color palette?",
+        "q_typography": "Typography?",
+        "q_variations": "Multiple variations in the prompt?",
+        "q_variations_count": "How many variations? (2 to 6)",
+        "q_copy_clipboard": "Copy prompt to clipboard?",
+        "q_save_files": "Save brief to .txt, .json and .md?",
+        # Quick mode
+        "q_quick_brand": "Brand name:",
+        "q_quick_sector": "Sector?",
+        "q_quick_logo_type": "Logo type?",
+        "q_quick_palette": "Palette?",
+        # Hints
+        "hint_concept_1": "Describe what the logo represents symbolically.",
+        "hint_concept_2": "Example: 'A mountain blending into an upward arrow'.",
+        "hint_main_element_1": "Be specific: shape, subject, action.",
+        "hint_main_element_2": "Example: 'A stylized fox head formed by geometric triangles'.",
+        "hint_palette": "You can pick a predefined palette or enter your own.",
+        "hint_multi": "Separate choices with commas. Example: 1,3,5",
+        # Output messages
+        "copied_clipboard": "  Prompt copied to clipboard.",
+        "cannot_copy": "  Could not copy (system tool unavailable).",
+        "files_generated": "  Files generated:",
+        "done_message": "  Done. Happy creating.",
+        "interrupted": "  Interrupted. See you soon.",
+        "error": "  Unexpected error: {exc}",
+        # Tips body (multi-line)
+        "tips_body": (
+            "  1. Paste the prompt into ChatGPT (DALL-E 3), Midjourney or an SDXL tool.\n"
+            "  2. Ask for iterations:\n"
+            '     - "Generate 3 variations with different compositions"\n'
+            '     - "Make it more minimalist"\n'
+            '     - "Switch to a monochromatic black and white version"\n'
+            "  3. For precise text rendering, retouch in Figma or Canva.\n"
+            "  4. Iterate: the first result is rarely the best.\n"
+        ),
+        # Prompts and validators
+        "input_required": "   This answer is required.",
+        "invalid_choice": "   Invalid choice, try again.",
+        "invalid_format_min": "   Invalid format ({min} choice(s) min).",
+        "custom_input_prompt": "   Specify: ",
+        "default_label": "default: {default}",
+        "default_marker": "(default)",
+        "other_option": "Other (custom input)",
+        "yes_no_yes_default": "(Y/n)",
+        "yes_no_no_default": "(y/N)",
+        # File save instructions (written into the .txt export)
+        "save_txt_header": "PROMPT FOR: {brand}",
+        "save_txt_howto": (
+            "HOW TO USE\n"
+            "1. Copy the prompt above.\n"
+            "2. Paste it into ChatGPT (DALL-E 3), Midjourney or Stable Diffusion.\n"
+            "3. Ask for variations: 'Generate 3 variations with different color schemes'.\n"
+            "4. Refine: 'Make it more minimalist', 'Use thinner lines', etc.\n"
+            "5. For the final text rendering, retouch in Figma or Canva.\n"
+        ),
+        # Markdown brief
+        "md_title": "Logo brief: {brand}",
+        "md_generated_on": "Generated on {ts}",
+        "md_identity": "Identity",
+        "md_brand": "Brand",
+        "md_sector": "Sector",
+        "md_logo_type": "Logo type",
+        "md_creative_direction": "Creative direction",
+        "md_values": "Values",
+        "md_concept": "Concept",
+        "md_main_element": "Main element",
+        "md_graphic_direction": "Graphic direction",
+        "md_styles": "Styles",
+        "md_palette": "Palette",
+        "md_typography": "Typography",
+        "md_generated_prompt": "Generated prompt",
+    },
+    "fr": {
+        # Banners and section titles
+        "banner_title": "Générateur de prompt logo : DALL-E 3 / Midjourney / SDXL",
+        "intro_8q": "Réponds aux 8 questions pour générer un prompt sur mesure.",
+        "step_label": "Étape {n}/{total}",
+        "step_1_title": "Identité de la marque",
+        "step_2_title": "Secteur d'activité",
+        "step_3_title": "Type de logo",
+        "step_4_title": "Valeurs et émotions",
+        "step_5_title": "Concept symbolique",
+        "step_6_title": "Élément visuel principal",
+        "step_7_title": "Style graphique",
+        "step_8_title": "Couleurs et typographie",
+        "quick_mode_title": "Mode rapide : presets",
+        "generated_prompt_header": "Prompt généré",
+        "tips_header": "Conseils pour la suite",
+        # Questions (full interview)
+        "q_brand_name": "Quel est le nom de ta marque ou entreprise ?",
+        "q_sector": "Dans quel secteur opère ta marque ?",
+        "q_logo_type": "Quel type de logo veux-tu créer ?",
+        "q_values": "Quelles valeurs ton logo doit-il transmettre ? (plusieurs choix)",
+        "q_concept": "Concept en une phrase (laisse vide pour passer) :",
+        "q_main_element": "Décris l'élément visuel principal du logo :",
+        "q_styles": "Quel ou quels styles graphiques ? (plusieurs choix possibles)",
+        "q_palette": "Quelle palette de couleurs ?",
+        "q_typography": "Quel style de typographie ?",
+        "q_variations": "Veux-tu plusieurs variations dans le prompt ?",
+        "q_variations_count": "Combien de variations ? (2 à 6)",
+        "q_copy_clipboard": "Copier le prompt dans le presse-papiers ?",
+        "q_save_files": "Sauvegarder le brief en .txt, .json et .md ?",
+        # Quick mode
+        "q_quick_brand": "Nom de la marque :",
+        "q_quick_sector": "Secteur ?",
+        "q_quick_logo_type": "Type de logo ?",
+        "q_quick_palette": "Palette ?",
+        # Hints
+        "hint_concept_1": "Décris ce que le logo représente symboliquement.",
+        "hint_concept_2": "Exemple : 'Une montagne qui se fond dans une flèche montante'.",
+        "hint_main_element_1": "Sois précis : forme, sujet, action.",
+        "hint_main_element_2": "Exemple : 'A stylized fox head formed by geometric triangles'.",
+        "hint_palette": "Tu peux choisir une palette préfaite ou saisir la tienne.",
+        "hint_multi": "Sépare tes choix par des virgules. Exemple : 1,3,5",
+        # Output messages
+        "copied_clipboard": "  Prompt copié dans le presse-papiers.",
+        "cannot_copy": "  Impossible de copier (outil système indisponible).",
+        "files_generated": "  Fichiers générés :",
+        "done_message": "  Bonne création.",
+        "interrupted": "  Interrompu. À bientôt.",
+        "error": "  Erreur inattendue : {exc}",
+        # Tips body
+        "tips_body": (
+            "  1. Colle le prompt dans ChatGPT (DALL-E 3), Midjourney ou un outil SDXL.\n"
+            "  2. Demande des itérations :\n"
+            '     - "Generate 3 variations with different compositions"\n'
+            '     - "Make it more minimalist"\n'
+            '     - "Switch to a monochromatic black and white version"\n'
+            "  3. Pour le rendu du texte précis, retouche dans Figma ou Canva.\n"
+            "  4. Itère : le premier résultat est rarement le meilleur.\n"
+        ),
+        # Prompts and validators
+        "input_required": "   Cette réponse est requise.",
+        "invalid_choice": "   Choix invalide, réessaie.",
+        "invalid_format_min": "   Format invalide ({min} choix min).",
+        "custom_input_prompt": "   Précise : ",
+        "default_label": "défaut : {default}",
+        "default_marker": "(défaut)",
+        "other_option": "Autre (saisie libre)",
+        "yes_no_yes_default": "(O/n)",
+        "yes_no_no_default": "(o/N)",
+        # File save instructions
+        "save_txt_header": "PROMPT POUR : {brand}",
+        "save_txt_howto": (
+            "MODE D'EMPLOI\n"
+            "1. Copie le prompt ci-dessus.\n"
+            "2. Colle-le dans ChatGPT (DALL-E 3), Midjourney ou Stable Diffusion.\n"
+            "3. Demande des variations : 'Generate 3 variations with different color schemes'.\n"
+            "4. Affine : 'Make it more minimalist', 'Use thinner lines', etc.\n"
+            "5. Pour le rendu final du texte, retouche dans Figma ou Canva.\n"
+        ),
+        # Markdown brief
+        "md_title": "Brief logo : {brand}",
+        "md_generated_on": "Généré le {ts}",
+        "md_identity": "Identité",
+        "md_brand": "Marque",
+        "md_sector": "Secteur",
+        "md_logo_type": "Type de logo",
+        "md_creative_direction": "Direction créative",
+        "md_values": "Valeurs",
+        "md_concept": "Concept",
+        "md_main_element": "Élément visuel",
+        "md_graphic_direction": "Direction graphique",
+        "md_styles": "Styles",
+        "md_palette": "Palette",
+        "md_typography": "Typographie",
+        "md_generated_prompt": "Prompt généré",
+    },
+}
+
+
+def t(key: str, **kwargs: Any) -> str:
+    """Translate a key using the current LANG, falling back to English."""
+    bundle = T.get(LANG, T["en"])
+    s = bundle.get(key) or T["en"].get(key, key)
+    return s.format(**kwargs) if kwargs else s
+
+
+def detect_language() -> str:
+    """Pick a default language from environment variables, then system locale."""
+    env_lang = os.environ.get("LANG") or os.environ.get("LANGUAGE") or ""
+    if env_lang.lower().startswith("fr"):
+        return "fr"
+    try:
+        sys_lang, _ = _locale.getlocale()
+        if sys_lang and sys_lang.lower().startswith("fr"):
+            return "fr"
+    except Exception:
+        pass
+    return "en"
+
+
+# Yes/no answer parsing accepts the local language plus English.
+YES_WORDS = {"y", "yes", "o", "oui"}
+
+
+# ---------------------------------------------------------------------------
+# Terminal: colors and stdio configuration
 # ---------------------------------------------------------------------------
 
 
 class Color:
-    """Codes ANSI pour la couleur en terminal. Désactivable globalement."""
+    """ANSI color codes for terminal output. Can be globally disabled."""
 
     enabled = True
 
@@ -59,7 +295,7 @@ class Color:
 
 
 def enable_windows_ansi() -> None:
-    """Active le support ANSI sous Windows (cmd.exe, PowerShell)."""
+    """Enable ANSI escape sequence support on Windows consoles."""
     if platform.system() != "Windows":
         return
     try:
@@ -72,7 +308,7 @@ def enable_windows_ansi() -> None:
 
 
 def ensure_utf8_stdio() -> None:
-    """Force stdout / stderr en UTF-8 (utile sous Windows où cp1252 est la cible par défaut)."""
+    """Force stdout / stderr to UTF-8 (important on Windows where cp1252 is the default)."""
     for stream_name in ("stdout", "stderr"):
         stream = getattr(sys, stream_name, None)
         if stream is None:
@@ -85,6 +321,11 @@ def ensure_utf8_stdio() -> None:
                 pass
 
 
+# ---------------------------------------------------------------------------
+# UI primitives
+# ---------------------------------------------------------------------------
+
+
 def banner(text: str) -> None:
     line = "═" * 64
     print()
@@ -94,7 +335,7 @@ def banner(text: str) -> None:
 
 
 def step(num: int, total: int, title: str) -> None:
-    label = f"Étape {num}/{total}"
+    label = t("step_label", n=num, total=total)
     print()
     print(Color.wrap(Color.MAGENTA, f"┌─ {label} "))
     print(Color.wrap(Color.BOLD + Color.MAGENTA, f"│  {title}"))
@@ -106,8 +347,8 @@ def hint(text: str) -> None:
 
 
 def ask(question: str, *, required: bool = True, default: str | None = None) -> str:
-    """Pose une question texte libre."""
-    suffix = f" {Color.wrap(Color.DIM, f'[défaut: {default}]')}" if default else ""
+    """Ask a free-text question."""
+    suffix = f" {Color.wrap(Color.DIM, '[' + t('default_label', default=default) + ']')}" if default else ""
     print(f"\n{Color.wrap(Color.YELLOW, 'Q')} {question}{suffix}")
     while True:
         answer = input(Color.wrap(Color.GREEN, " > ")).strip()
@@ -117,7 +358,7 @@ def ask(question: str, *, required: bool = True, default: str | None = None) -> 
             return default
         if not required:
             return ""
-        print(Color.wrap(Color.RED, "   Cette réponse est requise."))
+        print(Color.wrap(Color.RED, t("input_required")))
 
 
 def ask_choice(
@@ -127,13 +368,13 @@ def ask_choice(
     allow_custom: bool = True,
     default_index: int | None = None,
 ) -> str:
-    """Choix unique parmi des options numérotées."""
+    """Single choice among numbered options."""
     print(f"\n{Color.wrap(Color.YELLOW, 'Q')} {question}")
     for i, opt in enumerate(options, 1):
-        marker = Color.wrap(Color.DIM, "(défaut)") if i - 1 == default_index else ""
+        marker = Color.wrap(Color.DIM, t("default_marker")) if i - 1 == default_index else ""
         print(f"   {Color.wrap(Color.CYAN, f'{i:>2}.')} {opt} {marker}")
     if allow_custom:
-        print(f"   {Color.wrap(Color.CYAN, f'{len(options) + 1:>2}.')} Autre (saisie libre)")
+        print(f"   {Color.wrap(Color.CYAN, f'{len(options) + 1:>2}.')} {t('other_option')}")
 
     while True:
         raw = input(Color.wrap(Color.GREEN, " > ")).strip()
@@ -144,18 +385,18 @@ def ask_choice(
             if 1 <= n <= len(options):
                 return options[n - 1]
             if allow_custom and n == len(options) + 1:
-                custom = input(Color.wrap(Color.GREEN, "   ✏  Précise : ")).strip()
+                custom = input(Color.wrap(Color.GREEN, t("custom_input_prompt"))).strip()
                 if custom:
                     return custom
-        print(Color.wrap(Color.RED, "   Choix invalide, réessaie."))
+        print(Color.wrap(Color.RED, t("invalid_choice")))
 
 
 def ask_multi(question: str, options: Sequence[str], *, min_choices: int = 1) -> list[str]:
-    """Choix multiples séparés par virgules."""
+    """Multiple choice, comma-separated."""
     print(f"\n{Color.wrap(Color.YELLOW, 'Q')} {question}")
     for i, opt in enumerate(options, 1):
         print(f"   {Color.wrap(Color.CYAN, f'{i:>2}.')} {opt}")
-    hint("Sépare tes choix par des virgules. Exemple : 1,3,5")
+    hint(t("hint_multi"))
 
     while True:
         raw = input(Color.wrap(Color.GREEN, " > ")).strip()
@@ -170,118 +411,213 @@ def ask_multi(question: str, options: Sequence[str], *, min_choices: int = 1) ->
                 return result
         except ValueError:
             pass
-        print(Color.wrap(Color.RED, f"   Format invalide ({min_choices} choix min)."))
+        print(Color.wrap(Color.RED, t("invalid_format_min", min=min_choices)))
 
 
 def ask_yes_no(question: str, *, default: bool = False) -> bool:
-    suffix = "(O/n)" if default else "(o/N)"
+    suffix = t("yes_no_yes_default") if default else t("yes_no_no_default")
     print(f"\n{Color.wrap(Color.YELLOW, 'Q')} {question} {Color.wrap(Color.DIM, suffix)}")
     raw = input(Color.wrap(Color.GREEN, " > ")).strip().lower()
     if not raw:
         return default
-    return raw in {"o", "oui", "y", "yes"}
+    return raw in YES_WORDS
 
 
 # ---------------------------------------------------------------------------
-# Données de référence : presets, palettes, traductions
+# Localized options
 # ---------------------------------------------------------------------------
+#
+# Each option is a dict with translations under language codes ("en", "fr").
+# Display picks opt[LANG]. The prompt builder always uses opt["en"], so the
+# resulting prompt stays in English regardless of the user's interface
+# language (image models perform best in English).
 
 
-SECTORS = [
-    "Technology / SaaS",
-    "Restaurant / Café / Food",
-    "Mode / Fashion / Luxe",
-    "Finance / Banque / Assurance",
-    "Santé / Bien-être / Fitness",
-    "Éducation / Formation",
-    "Art / Design / Créatif",
-    "E-commerce / Retail",
-    "Immobilier / Construction",
-    "Sport / Outdoor",
-    "Voyage / Tourisme / Hôtellerie",
-    "Musique / Divertissement",
-    "Agriculture / Bio / Écologie",
-    "Crypto / Web3 / Blockchain",
-    "Cosmétique / Beauté",
+def _label(opt: dict[str, str]) -> str:
+    """Return the user-facing label of an option, falling back to English."""
+    return opt.get(LANG) or opt["en"]
+
+
+def ask_option(
+    question: str,
+    options: list[dict[str, str]],
+    *,
+    allow_custom: bool = True,
+    default_index: int | None = None,
+) -> dict[str, str]:
+    """Single-choice helper that returns the chosen option dict."""
+    labels = [_label(opt) for opt in options]
+    chosen = ask_choice(question, labels, allow_custom=allow_custom, default_index=default_index)
+    for opt in options:
+        if _label(opt) == chosen:
+            return opt
+    # Custom input: keep the same string for both English and current language.
+    return {"en": chosen, "fr": chosen}
+
+
+def ask_options_multi(
+    question: str, options: list[dict[str, str]], *, min_choices: int = 1
+) -> list[dict[str, str]]:
+    """Multi-choice helper that returns a list of chosen option dicts."""
+    labels = [_label(opt) for opt in options]
+    chosen_labels = ask_multi(question, labels, min_choices=min_choices)
+    result = []
+    for cl in chosen_labels:
+        for opt in options:
+            if _label(opt) == cl:
+                result.append(opt)
+                break
+    return result
+
+
+SECTORS: list[dict[str, str]] = [
+    {"en": "Technology / SaaS", "fr": "Technologie / SaaS"},
+    {"en": "Restaurant / Cafe / Food", "fr": "Restaurant / Café / Food"},
+    {"en": "Fashion / Luxury", "fr": "Mode / Luxe"},
+    {"en": "Finance / Banking / Insurance", "fr": "Finance / Banque / Assurance"},
+    {"en": "Health / Wellness / Fitness", "fr": "Santé / Bien-être / Fitness"},
+    {"en": "Education / Training", "fr": "Éducation / Formation"},
+    {"en": "Art / Design / Creative", "fr": "Art / Design / Créatif"},
+    {"en": "E-commerce / Retail", "fr": "E-commerce / Retail"},
+    {"en": "Real estate / Construction", "fr": "Immobilier / Construction"},
+    {"en": "Sport / Outdoor", "fr": "Sport / Outdoor"},
+    {"en": "Travel / Tourism / Hospitality", "fr": "Voyage / Tourisme / Hôtellerie"},
+    {"en": "Music / Entertainment", "fr": "Musique / Divertissement"},
+    {"en": "Agriculture / Organic / Sustainability", "fr": "Agriculture / Bio / Écologie"},
+    {"en": "Crypto / Web3 / Blockchain", "fr": "Crypto / Web3 / Blockchain"},
+    {"en": "Cosmetics / Beauty", "fr": "Cosmétique / Beauté"},
 ]
 
-LOGO_TYPES = [
-    "Pictorial mark (icône seule, comme Apple)",
-    "Wordmark (texte stylisé, comme Google)",
-    "Lettermark (initiales, comme HBO)",
-    "Combination mark (icône + texte, comme Adidas)",
-    "Emblem (badge fermé, comme Starbucks)",
-    "Mascot (personnage, comme KFC)",
-    "Abstract mark (forme abstraite, comme Pepsi)",
-    "Monogram (lettres entrelacées, comme Chanel)",
+LOGO_TYPES: list[dict[str, str]] = [
+    {"en": "Pictorial mark (icon only, like Apple)", "fr": "Pictorial mark (icône seule, comme Apple)"},
+    {"en": "Wordmark (stylized text, like Google)", "fr": "Wordmark (texte stylisé, comme Google)"},
+    {"en": "Lettermark (initials, like HBO)", "fr": "Lettermark (initiales, comme HBO)"},
+    {"en": "Combination mark (icon + text, like Adidas)", "fr": "Combination mark (icône + texte, comme Adidas)"},
+    {"en": "Emblem (closed badge, like Starbucks)", "fr": "Emblem (badge fermé, comme Starbucks)"},
+    {"en": "Mascot (character, like KFC)", "fr": "Mascot (personnage, comme KFC)"},
+    {"en": "Abstract mark (abstract shape, like Pepsi)", "fr": "Abstract mark (forme abstraite, comme Pepsi)"},
+    {"en": "Monogram (interlaced letters, like Chanel)", "fr": "Monogram (lettres entrelacées, comme Chanel)"},
 ]
 
-VALUES = [
-    "trustworthiness and stability",
-    "innovation and modernity",
-    "luxury and elegance",
-    "warmth and friendliness",
-    "energy and dynamism",
-    "nature and authenticity",
-    "professionalism and seriousness",
-    "creativity and originality",
-    "strength and power",
-    "softness and accessibility",
-    "playfulness and fun",
-    "minimalism and clarity",
-    "premium craftsmanship",
-    "sustainability and ethics",
+VALUES: list[dict[str, str]] = [
+    {"en": "trustworthiness and stability", "fr": "confiance et stabilité"},
+    {"en": "innovation and modernity", "fr": "innovation et modernité"},
+    {"en": "luxury and elegance", "fr": "luxe et élégance"},
+    {"en": "warmth and friendliness", "fr": "chaleur et convivialité"},
+    {"en": "energy and dynamism", "fr": "énergie et dynamisme"},
+    {"en": "nature and authenticity", "fr": "nature et authenticité"},
+    {"en": "professionalism and seriousness", "fr": "professionnalisme et sérieux"},
+    {"en": "creativity and originality", "fr": "créativité et originalité"},
+    {"en": "strength and power", "fr": "force et puissance"},
+    {"en": "softness and accessibility", "fr": "douceur et accessibilité"},
+    {"en": "playfulness and fun", "fr": "ludisme et amusement"},
+    {"en": "minimalism and clarity", "fr": "minimalisme et clarté"},
+    {"en": "premium craftsmanship", "fr": "artisanat premium"},
+    {"en": "sustainability and ethics", "fr": "durabilité et éthique"},
 ]
 
-STYLES = [
-    "minimalist",
-    "flat design",
-    "line art with thin strokes",
-    "geometric",
-    "vintage / retro",
-    "modern",
-    "hand-drawn / organic",
-    "gradient",
-    "monochromatic",
-    "bold and thick lines",
-    "Bauhaus inspired",
-    "art deco",
-    "isometric",
-    "negative space",
-    "Japanese / zen",
+STYLES: list[dict[str, str]] = [
+    {"en": "minimalist", "fr": "minimaliste"},
+    {"en": "flat design", "fr": "flat design"},
+    {"en": "line art with thin strokes", "fr": "line art avec traits fins"},
+    {"en": "geometric", "fr": "géométrique"},
+    {"en": "vintage / retro", "fr": "vintage / rétro"},
+    {"en": "modern", "fr": "moderne"},
+    {"en": "hand-drawn / organic", "fr": "dessiné à la main / organique"},
+    {"en": "gradient", "fr": "dégradé"},
+    {"en": "monochromatic", "fr": "monochrome"},
+    {"en": "bold and thick lines", "fr": "lignes épaisses et marquées"},
+    {"en": "Bauhaus inspired", "fr": "inspiré Bauhaus"},
+    {"en": "art deco", "fr": "art déco"},
+    {"en": "isometric", "fr": "isométrique"},
+    {"en": "negative space", "fr": "negative space"},
+    {"en": "Japanese / zen", "fr": "japonais / zen"},
 ]
 
-PALETTES = {
-    "Bleu corporate": "deep navy blue (#1A2B4A), bright sky blue (#3B82F6), white (#FFFFFF)",
-    "Vert nature": "forest green (#2D5016), sage (#A3B18A), warm cream (#FAF3E0)",
-    "Orange énergie": "vibrant orange (#FF6B35), deep red (#C1121F), off-white (#F5F5F5)",
-    "Noir et or luxe": "matte black (#1A1A1A), metallic gold (#D4AF37), ivory (#FFFFF0)",
-    "Pastel doux": "blush pink (#F4C2C2), mint (#A8E6CF), butter yellow (#FFF9C4)",
-    "Néon tech": "electric purple (#9B5DE5), cyan (#00F5D4), hot pink (#F15BB5)",
-    "Terre et beige": "terracotta (#C97D60), warm beige (#E6CCB2), olive (#6A7E40)",
-    "Monochrome": "pure black (#000000) and pure white (#FFFFFF), no other colors",
-    "Bleu et corail": "midnight blue (#003049), coral (#F77F00), pale cream (#FFF3B0)",
-    "Crypto futuriste": "deep space black (#0A0E27), neon green (#00FF94), silver (#C0C0C0)",
-}
+# Palettes: each has a localized display name and a single English value
+# (hex codes + English color names, used as-is in the prompt).
+PALETTES: list[dict[str, Any]] = [
+    {
+        "name": {"en": "Corporate blue", "fr": "Bleu corporate"},
+        "value": "deep navy blue (#1A2B4A), bright sky blue (#3B82F6), white (#FFFFFF)",
+    },
+    {
+        "name": {"en": "Nature green", "fr": "Vert nature"},
+        "value": "forest green (#2D5016), sage (#A3B18A), warm cream (#FAF3E0)",
+    },
+    {
+        "name": {"en": "Energy orange", "fr": "Orange énergie"},
+        "value": "vibrant orange (#FF6B35), deep red (#C1121F), off-white (#F5F5F5)",
+    },
+    {
+        "name": {"en": "Luxury black & gold", "fr": "Noir et or luxe"},
+        "value": "matte black (#1A1A1A), metallic gold (#D4AF37), ivory (#FFFFF0)",
+    },
+    {
+        "name": {"en": "Soft pastel", "fr": "Pastel doux"},
+        "value": "blush pink (#F4C2C2), mint (#A8E6CF), butter yellow (#FFF9C4)",
+    },
+    {
+        "name": {"en": "Neon tech", "fr": "Neon tech"},
+        "value": "electric purple (#9B5DE5), cyan (#00F5D4), hot pink (#F15BB5)",
+    },
+    {
+        "name": {"en": "Earth and beige", "fr": "Terre et beige"},
+        "value": "terracotta (#C97D60), warm beige (#E6CCB2), olive (#6A7E40)",
+    },
+    {
+        "name": {"en": "Monochrome", "fr": "Monochrome"},
+        "value": "pure black (#000000) and pure white (#FFFFFF), no other colors",
+    },
+    {
+        "name": {"en": "Blue and coral", "fr": "Bleu et corail"},
+        "value": "midnight blue (#003049), coral (#F77F00), pale cream (#FFF3B0)",
+    },
+    {
+        "name": {"en": "Crypto futuristic", "fr": "Crypto futuriste"},
+        "value": "deep space black (#0A0E27), neon green (#00FF94), silver (#C0C0C0)",
+    },
+]
 
-TYPOGRAPHY = [
-    "modern sans-serif, clean and geometric (Helvetica, Inter style)",
-    "classic serif, elegant and refined (Garamond, Playfair style)",
-    "bold display font, impactful and confident",
-    "handwritten script, personal and warm",
-    "geometric and futuristic, with sharp angles",
-    "vintage typography with subtle ornaments",
-    "no text, icon only",
+TYPOGRAPHY: list[dict[str, str]] = [
+    {
+        "en": "modern sans-serif, clean and geometric (Helvetica, Inter style)",
+        "fr": "sans-serif moderne, clean et géométrique (style Helvetica, Inter)",
+    },
+    {
+        "en": "classic serif, elegant and refined (Garamond, Playfair style)",
+        "fr": "serif classique, élégant et raffiné (style Garamond, Playfair)",
+    },
+    {
+        "en": "bold display font, impactful and confident",
+        "fr": "display gras, impactant et affirmé",
+    },
+    {
+        "en": "handwritten script, personal and warm",
+        "fr": "écriture manuscrite, personnelle et chaleureuse",
+    },
+    {
+        "en": "geometric and futuristic, with sharp angles",
+        "fr": "géométrique et futuriste, avec des angles vifs",
+    },
+    {
+        "en": "vintage typography with subtle ornaments",
+        "fr": "typographie vintage avec ornements subtils",
+    },
+    {"en": "no text, icon only", "fr": "pas de texte, icône seule"},
 ]
 
 
 # ---------------------------------------------------------------------------
-# Modèle de données et génération
+# Brief model and prompt builder
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class LogoBrief:
+    """A complete logo brief. All string values are stored in English
+    so the generated prompt and machine-readable exports remain stable."""
+
     brand_name: str
     sector: str
     logo_type: str
@@ -294,9 +630,9 @@ class LogoBrief:
     variations: int = 1
 
     def to_prompt(self) -> str:
-        """Construit le prompt anglais optimisé pour DALL-E 3 / Midjourney."""
+        """Build the English prompt optimized for DALL-E 3 / Midjourney."""
         sector_lower = self.sector.lower()
-        is_food = any(k in sector_lower for k in ("restaurant", "café", "cafe", "food"))
+        is_food = any(k in sector_lower for k in ("restaurant", "cafe", "café", "food"))
         entity = "business" if is_food else "company"
 
         values_text = ", ".join(v.lower() for v in self.values) if self.values else "professionalism and clarity"
@@ -344,26 +680,26 @@ Photo-realistic rendering, drop shadows (unless explicitly part of the style), c
 
     def to_markdown(self) -> str:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        return f"""# Brief logo : {self.brand_name}
+        return f"""# {t('md_title', brand=self.brand_name)}
 
-*Généré le {ts}*
+*{t('md_generated_on', ts=ts)}*
 
-## Identité
-- **Marque** : {self.brand_name}
-- **Secteur** : {self.sector}
-- **Type de logo** : {self.logo_type}
+## {t('md_identity')}
+- **{t('md_brand')}**: {self.brand_name}
+- **{t('md_sector')}**: {self.sector}
+- **{t('md_logo_type')}**: {self.logo_type}
 
-## Direction créative
-- **Valeurs** : {", ".join(self.values)}
-- **Concept** : {self.visual_concept}
-- **Élément visuel** : {self.main_element}
+## {t('md_creative_direction')}
+- **{t('md_values')}**: {", ".join(self.values)}
+- **{t('md_concept')}**: {self.visual_concept}
+- **{t('md_main_element')}**: {self.main_element}
 
-## Direction graphique
-- **Styles** : {", ".join(self.styles)}
-- **Palette** : {self.colors}
-- **Typographie** : {self.typography}
+## {t('md_graphic_direction')}
+- **{t('md_styles')}**: {", ".join(self.styles)}
+- **{t('md_palette')}**: {self.colors}
+- **{t('md_typography')}**: {self.typography}
 
-## Prompt généré
+## {t('md_generated_prompt')}
 
 ```
 {self.to_prompt()}
@@ -372,7 +708,7 @@ Photo-realistic rendering, drop shadows (unless explicitly part of the style), c
 
 
 # ---------------------------------------------------------------------------
-# Mode interactif
+# Interview flows
 # ---------------------------------------------------------------------------
 
 
@@ -380,56 +716,49 @@ TOTAL_STEPS = 8
 
 
 def collect_brief() -> LogoBrief:
-    step(1, TOTAL_STEPS, "Identité de la marque")
-    brand_name = ask("Quel est le nom de ta marque ou entreprise ?")
+    """Full 8-step interactive interview."""
+    step(1, TOTAL_STEPS, t("step_1_title"))
+    brand_name = ask(t("q_brand_name"))
 
-    step(2, TOTAL_STEPS, "Secteur d'activité")
-    sector = ask_choice("Dans quel secteur opère ta marque ?", SECTORS)
+    step(2, TOTAL_STEPS, t("step_2_title"))
+    sector = ask_option(t("q_sector"), SECTORS)
 
-    step(3, TOTAL_STEPS, "Type de logo")
-    logo_type = ask_choice("Quel type de logo veux-tu créer ?", LOGO_TYPES)
+    step(3, TOTAL_STEPS, t("step_3_title"))
+    logo_type = ask_option(t("q_logo_type"), LOGO_TYPES)
 
-    step(4, TOTAL_STEPS, "Valeurs et émotions")
-    values = ask_multi(
-        "Quelles valeurs ton logo doit-il transmettre ? (plusieurs choix)",
-        VALUES,
-        min_choices=1,
-    )
+    step(4, TOTAL_STEPS, t("step_4_title"))
+    values = ask_options_multi(t("q_values"), VALUES, min_choices=1)
 
-    step(5, TOTAL_STEPS, "Concept symbolique")
-    hint("Décris ce que le logo représente symboliquement.")
-    hint("Exemple : 'Une montagne qui se fond dans une flèche montante'.")
+    step(5, TOTAL_STEPS, t("step_5_title"))
+    hint(t("hint_concept_1"))
+    hint(t("hint_concept_2"))
     concept = ask(
-        "Concept en une phrase (laisse vide pour passer) :",
+        t("q_concept"),
         required=False,
         default="The design should subtly reflect the brand's core identity.",
     )
 
-    step(6, TOTAL_STEPS, "Élément visuel principal")
-    hint("Sois précis : forme, sujet, action.")
-    hint("Exemple : 'A stylized fox head formed by geometric triangles'.")
-    main_element = ask("Décris l'élément visuel principal du logo :")
+    step(6, TOTAL_STEPS, t("step_6_title"))
+    hint(t("hint_main_element_1"))
+    hint(t("hint_main_element_2"))
+    main_element = ask(t("q_main_element"))
 
-    step(7, TOTAL_STEPS, "Style graphique")
-    styles = ask_multi("Quel ou quels styles graphiques ? (plusieurs choix possibles)", STYLES)
+    step(7, TOTAL_STEPS, t("step_7_title"))
+    styles = ask_options_multi(t("q_styles"), STYLES)
 
-    step(8, TOTAL_STEPS, "Couleurs et typographie")
-    hint("Tu peux choisir une palette préfaite ou saisir la tienne.")
-    palette_keys = list(PALETTES.keys())
-    palette_display = [f"{name} : {PALETTES[name]}" for name in palette_keys]
-    chosen_palette = ask_choice("Quelle palette de couleurs ?", palette_display)
+    step(8, TOTAL_STEPS, t("step_8_title"))
+    hint(t("hint_palette"))
+    palette_options = [
+        {**p["name"], "_value": p["value"]} for p in PALETTES
+    ]
+    chosen_palette = ask_option(t("q_palette"), palette_options)
+    colors = chosen_palette.get("_value") or _label(chosen_palette)
 
-    if chosen_palette in palette_display:
-        name = palette_keys[palette_display.index(chosen_palette)]
-        colors = PALETTES[name]
-    else:
-        colors = chosen_palette
-
-    typography = ask_choice("Quel style de typographie ?", TYPOGRAPHY)
+    typography = ask_option(t("q_typography"), TYPOGRAPHY)
 
     variations = 1
-    if ask_yes_no("Veux-tu plusieurs variations dans le prompt ?", default=False):
-        raw = ask("Combien de variations ? (2 à 6)", default="3")
+    if ask_yes_no(t("q_variations"), default=False):
+        raw = ask(t("q_variations_count"), default="3")
         try:
             variations = max(1, min(6, int(raw)))
         except ValueError:
@@ -437,47 +766,45 @@ def collect_brief() -> LogoBrief:
 
     return LogoBrief(
         brand_name=brand_name,
-        sector=sector,
-        logo_type=logo_type,
-        values=values,
+        sector=sector["en"],
+        logo_type=logo_type["en"],
+        values=[v["en"] for v in values],
         visual_concept=concept,
         main_element=main_element,
-        styles=styles,
+        styles=[s["en"] for s in styles],
         colors=colors,
-        typography=typography,
+        typography=typography["en"],
         variations=variations,
     )
 
 
-# ---------------------------------------------------------------------------
-# Mode rapide (presets)
-# ---------------------------------------------------------------------------
-
-
 def quick_brief() -> LogoBrief:
-    banner("Mode rapide : presets")
-    brand_name = ask("Nom de la marque :")
-    sector = ask_choice("Secteur ?", SECTORS[:8], allow_custom=False, default_index=0)
-    logo_type = ask_choice("Type de logo ?", LOGO_TYPES[:4], allow_custom=False, default_index=3)
-    palette_keys = list(PALETTES.keys())
-    palette_name = ask_choice("Palette ?", palette_keys, allow_custom=False, default_index=0)
+    """Reduced 4-question flow with sensible defaults for everything else."""
+    banner(t("quick_mode_title"))
+    brand_name = ask(t("q_quick_brand"))
+    sector = ask_option(t("q_quick_sector"), SECTORS[:8], allow_custom=False, default_index=0)
+    logo_type = ask_option(
+        t("q_quick_logo_type"), LOGO_TYPES[:4], allow_custom=False, default_index=3
+    )
+    palette_options = [{**p["name"], "_value": p["value"]} for p in PALETTES]
+    palette = ask_option(t("q_quick_palette"), palette_options, allow_custom=False, default_index=0)
 
     return LogoBrief(
         brand_name=brand_name,
-        sector=sector,
-        logo_type=logo_type,
-        values=["professionalism and seriousness", "modernity and innovation"],
+        sector=sector["en"],
+        logo_type=logo_type["en"],
+        values=["professionalism and seriousness", "innovation and modernity"],
         visual_concept="The design should subtly reflect the brand's core identity.",
         main_element=f"A clean abstract symbol representing the essence of {brand_name}.",
         styles=["minimalist", "modern", "flat design"],
-        colors=PALETTES[palette_name],
-        typography=TYPOGRAPHY[0],
+        colors=palette.get("_value") or _label(palette),
+        typography=TYPOGRAPHY[0]["en"],
         variations=3,
     )
 
 
 # ---------------------------------------------------------------------------
-# Sortie : sauvegarde, presse-papiers
+# Output: file save, clipboard
 # ---------------------------------------------------------------------------
 
 
@@ -496,19 +823,15 @@ def save_outputs(brief: LogoBrief, output_dir: Path) -> dict[str, Path]:
 
     txt_path = base.with_suffix(".txt")
     txt_path.write_text(
-        f"PROMPT POUR : {brief.brand_name}\n"
+        t("save_txt_header", brand=brief.brand_name)
+        + "\n"
         + "=" * 64
         + "\n\n"
         + brief.to_prompt()
         + "\n\n"
         + "=" * 64
         + "\n"
-        + "MODE D'EMPLOI\n"
-        + "1. Copie le prompt ci-dessus.\n"
-        + "2. Colle-le dans ChatGPT (DALL-E 3), Midjourney ou Stable Diffusion.\n"
-        + "3. Demande des variations : 'Generate 3 variations with different color schemes'.\n"
-        + "4. Affine : 'Make it more minimalist', 'Use thinner lines', etc.\n"
-        + "5. Pour le rendu final du texte, retouche dans Figma ou Canva.\n",
+        + t("save_txt_howto"),
         encoding="utf-8",
     )
     files["txt"] = txt_path
@@ -528,7 +851,7 @@ def save_outputs(brief: LogoBrief, output_dir: Path) -> dict[str, Path]:
 
 
 def copy_to_clipboard(text: str) -> bool:
-    """Tente de copier vers le presse-papiers selon l'OS, retourne True si OK."""
+    """Try to copy `text` to the system clipboard. Returns True on success."""
     system = platform.system()
     try:
         if system == "Windows":
@@ -557,74 +880,75 @@ def copy_to_clipboard(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Entrée principale
+# Entry point
 # ---------------------------------------------------------------------------
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Générateur de prompts pour logos compatible DALL-E 3 / Midjourney.",
+        description="Logo prompt generator compatible with DALL-E 3 / Midjourney / SDXL.",
     )
-    parser.add_argument("--quick", action="store_true", help="Mode rapide avec presets.")
+    parser.add_argument("--quick", action="store_true", help="Quick mode with presets.")
     parser.add_argument(
-        "--no-color", action="store_true", help="Désactive la couleur dans le terminal."
+        "--no-color", action="store_true", help="Disable ANSI colors in the terminal."
+    )
+    parser.add_argument(
+        "--lang",
+        choices=SUPPORTED_LANGS,
+        default=None,
+        help="Interface language. Defaults to system locale (en if unknown).",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path.cwd() / "output",
-        help="Dossier de sortie pour les fichiers générés. (défaut: ./output)",
+        help="Output directory for generated files. (default: ./output)",
     )
     return parser.parse_args()
 
 
 def main() -> int:
+    global LANG
+
     ensure_utf8_stdio()
     args = parse_args()
+
+    LANG = args.lang or detect_language()
 
     if args.no_color or not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
         Color.enabled = False
     else:
         enable_windows_ansi()
 
-    banner("Générateur de prompt logo : DALL-E 3 / Midjourney / SDXL")
+    banner(t("banner_title"))
     if args.quick:
         brief = quick_brief()
     else:
-        print(Color.wrap(Color.GRAY, "Réponds aux 8 questions pour générer un prompt sur mesure."))
+        print(Color.wrap(Color.GRAY, t("intro_8q")))
         brief = collect_brief()
 
-    banner("Prompt généré")
+    banner(t("generated_prompt_header"))
     print()
     print(Color.wrap(Color.BOLD, brief.to_prompt()))
     print()
 
-    if ask_yes_no("Copier le prompt dans le presse-papiers ?", default=True):
+    if ask_yes_no(t("q_copy_clipboard"), default=True):
         if copy_to_clipboard(brief.to_prompt()):
-            print(Color.wrap(Color.GREEN, "  Prompt copié dans le presse-papiers."))
+            print(Color.wrap(Color.GREEN, t("copied_clipboard")))
         else:
-            print(Color.wrap(Color.YELLOW, "  Impossible de copier (outil système indisponible)."))
+            print(Color.wrap(Color.YELLOW, t("cannot_copy")))
 
-    if ask_yes_no("Sauvegarder le brief en .txt, .json et .md ?", default=True):
+    if ask_yes_no(t("q_save_files"), default=True):
         files = save_outputs(brief, args.output_dir)
-        print(Color.wrap(Color.GREEN, "  Fichiers générés :"))
+        print(Color.wrap(Color.GREEN, t("files_generated")))
         for kind, path in files.items():
             print(f"    {kind.upper():<4} {path}")
 
-    banner("Conseils pour la suite")
-    print(
-        """  1. Colle le prompt dans ChatGPT (DALL-E 3), Midjourney ou un outil SDXL.
-  2. Demande des itérations :
-     - "Generate 3 variations with different compositions"
-     - "Make it more minimalist"
-     - "Switch to a monochromatic black and white version"
-  3. Pour le rendu du texte précis, retouche dans Figma ou Canva.
-  4. Itère : le premier résultat est rarement le meilleur.
-"""
-    )
+    banner(t("tips_header"))
+    print(t("tips_body"))
 
     print(Color.wrap(Color.CYAN, "═" * 64))
-    print(Color.wrap(Color.BOLD + Color.GREEN, "  Bonne création."))
+    print(Color.wrap(Color.BOLD + Color.GREEN, t("done_message")))
     print(Color.wrap(Color.CYAN, "═" * 64))
     return 0
 
@@ -633,8 +957,8 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        print(Color.wrap(Color.YELLOW, "\n\n  Interrompu. À bientôt."))
+        print(Color.wrap(Color.YELLOW, "\n\n" + t("interrupted")))
         sys.exit(130)
     except Exception as exc:
-        print(Color.wrap(Color.RED, f"\n  Erreur inattendue : {exc}"))
+        print(Color.wrap(Color.RED, "\n" + t("error", exc=exc)))
         sys.exit(1)

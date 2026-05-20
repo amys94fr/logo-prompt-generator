@@ -8,6 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-windows%20%7C%20macos%20%7C%20linux-lightgrey)](https://github.com/amys94fr/logo-prompt-generator)
 [![Zero deps](https://img.shields.io/badge/dependencies-zero-brightgreen)](https://github.com/amys94fr/logo-prompt-generator)
+[![i18n](https://img.shields.io/badge/i18n-en%20%7C%20fr-blueviolet)](https://github.com/amys94fr/logo-prompt-generator)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/amys94fr/logo-prompt-generator/pulls)
 
 [Quick Start](#quick-start) · [Demo](#demo) · [Why](#why-this-exists) · [Features](#features) · [Examples](#examples) · [Roadmap](#roadmap)
@@ -112,6 +113,7 @@ The tool gives you 90% of the value of a hand-written brief, in 5% of the time. 
 - **8 logo type classifications** (pictorial, wordmark, lettermark, combination, emblem, mascot, abstract, monogram), each with a recognizable reference brand
 - **10 hand-tuned color palettes** with hex codes, ready to paste
 - **15 graphic style modifiers** (minimalist, Bauhaus, isometric, negative space, Japanese zen, and more)
+- **Bilingual interface**: English and French, auto-detected from system locale or forced with `--lang`. The generated prompt stays in English regardless (image models perform best in English)
 - **Quick mode** (`--quick`) for power users: 4 questions, presets pre-selected
 - **Cross-platform clipboard copy**: Windows `clip`, macOS `pbcopy`, Linux `xclip` / `xsel` / `wl-copy`
 - **Three export formats**: `.txt` (ready to paste), `.json` (machine-readable brief), `.md` (designer-ready briefing doc)
@@ -151,6 +153,7 @@ Four questions only: brand name, sector, logo type, palette. Everything else use
 | Flag | Description |
 |------|-------------|
 | `--quick` | Quick mode with presets |
+| `--lang {en,fr}` | Force the interface language. Auto-detected from system locale by default |
 | `--no-color` | Disable ANSI colors in the terminal |
 | `--output-dir DIR` | Output directory for generated files (default: `./output`) |
 

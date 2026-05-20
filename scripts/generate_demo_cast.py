@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Genere un fichier asciinema v2 (.cast) montrant une session complete
-du logo prompt generator. Pas besoin du CLI asciinema : on ecrit le JSON
-brut, lisible par tout player asciinema (CLI, asciinema.org, web embed).
+Generate an asciinema v2 (.cast) file showcasing a full logo prompt
+generator session. The asciinema CLI is not required: this script writes
+the raw JSON stream directly, which is readable by any asciinema player
+(CLI, asciinema.org web upload, embedded web player).
 
 Usage:
     python scripts/generate_demo_cast.py
@@ -17,7 +18,7 @@ import time
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# ANSI codes (avec caractere ESC reel)
+# ANSI escape codes (with real ESC character)
 # ---------------------------------------------------------------------------
 
 ESC = "\x1b"
@@ -55,7 +56,7 @@ class Recorder:
         self.out(text + "\r\n")
 
     def type_text(self, text: str, *, per_char: float = 0.06) -> None:
-        """Simule la frappe humaine, caractere par caractere."""
+        """Simulate human typing, character by character."""
         for ch in text:
             self.out(ch)
             self.wait(per_char)

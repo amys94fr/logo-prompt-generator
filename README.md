@@ -36,6 +36,20 @@ A single Python script that asks you 8 well-designed questions, then assembles a
 
 ## Demo
 
+Watch a full 30-second session: [`demo/logo-prompt-generator.cast`](demo/logo-prompt-generator.cast)
+
+```bash
+# Play locally (requires asciinema)
+asciinema play demo/logo-prompt-generator.cast
+
+# Or upload to asciinema.org for a shareable URL
+asciinema upload demo/logo-prompt-generator.cast
+```
+
+You can also drag and drop the `.cast` file at [asciinema.org/a/upload](https://asciinema.org/a/upload) to get an embeddable player. To regenerate the demo after changing the script, run `python scripts/generate_demo_cast.py`.
+
+### Session walkthrough
+
 ```
 $ python generateur_prompt_logo.py
 
@@ -209,11 +223,15 @@ Same coffee shop. Completely different category of output.
 
 ```
 logo-prompt-generator/
-├── generateur_prompt_logo.py   # The script (single file, ~450 lines)
+├── generateur_prompt_logo.py       # The script (single file, ~450 lines)
+├── scripts/
+│   └── generate_demo_cast.py       # Regenerates the asciinema demo
+├── demo/
+│   └── logo-prompt-generator.cast  # Asciinema v2 recording
 ├── README.md
-├── LICENSE                     # MIT
+├── LICENSE                         # MIT
 ├── .gitignore
-└── output/                     # Generated briefs land here (gitignored)
+└── output/                         # Generated briefs land here (gitignored)
 ```
 
 ## Roadmap
